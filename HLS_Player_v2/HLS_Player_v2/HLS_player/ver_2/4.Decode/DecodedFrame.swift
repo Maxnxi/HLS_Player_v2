@@ -11,10 +11,11 @@ import Foundation
 struct DecodedFrame {
 	let width: Int
 	let height: Int
-	let data: [Data]
+	let data: [Data]  // Expecting at least 3 elements: [Y_data, UV_data, V_data]
 	let linesize: [Int]
 	let pts: Int64
-	let format: AVPixelFormat
+	let format: AVPixelFormat // Remove the 'format' property as we're no longer using FFmpeg constants
+	
 	
 	init?(frame: UnsafeMutablePointer<AVFrame>) {
 		width = Int(frame.pointee.width)
