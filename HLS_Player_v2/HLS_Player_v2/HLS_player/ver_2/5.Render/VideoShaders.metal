@@ -1,11 +1,6 @@
 #include <metal_stdlib>
 using namespace metal;
 
-struct VertexIn {
-	float3 position [[attribute(0)]];
-	float2 texCoord [[attribute(1)]];
-};
-
 struct VertexOut {
 	float4 position [[position]];
 	float2 texCoord;
@@ -22,22 +17,22 @@ vertex VertexOut vertexShader(uint vertexID [[vertex_id]],
 
 fragment float4 fragmentShader(VertexOut in [[stage_in]],
 							   texture2d<float> yTexture [[texture(0)]],
-							   texture2d<float> cbcrTexture [[texture(1)]]) {
+							   texture2d<float> uTexture [[texture(1)]],
+							   texture2d<float> vTexture [[texture(2)]]) {
 	constexpr sampler textureSampler(mag_filter::linear, min_filter::linear);
 	
-	float3 ycbcr = float3(
-		yTexture.sample(textureSampler, in.texCoord).r,
-		cbcrTexture.sample(textureSampler, in.texCoord).rg - float2(0.5, 0.5)
-	);
+	float y = yTexture.sample(textureSampler, in.texCoord).r;
+	float u = uTexture.sample(textureSampler, in.texCoord).r - 0.5;
+	float v = vTexture.sample(textureSampler, in.texCoord).r - 0.5;
 	
-	// BT.601 full range conversion
-	const float3x3 ycbcrToRGBTransform = float3x3(
-		float3(1.0, 0.0, 1.402),
-		float3(1.0, -0.344136, -0.714136),
-		float3(1.0, 1.772, 0.0)
-	);
+	// YUV to RGB conversion (BT.601 standard)
+	float3 rgb;
+	rgb.r = y + 1.402 * v;
+	rgb.g = y - 0.344 * u - 0.714 * v;
+	rgb.b = y + 1.772 * u;
 	
-	float3 rgb = ycbcrToRGBTransform * ycbcr;
+	// Ensure values are in the correct range
+	rgb = saturate(rgb);
 	
 	return float4(rgb, 1.0);
 }

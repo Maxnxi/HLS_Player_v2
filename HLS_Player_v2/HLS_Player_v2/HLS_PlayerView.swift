@@ -16,60 +16,91 @@ import SwiftUI
 //#Preview {
 //    HLS_PlayerView()
 //}
+
 import SwiftUI
 
 struct HLSPlayerView: UIViewRepresentable {
-	let player: HLS_Player_ver_2_Impl
+	@ObservedObject var player: HLS_Player_ver_2_Impl
 	
 	func makeUIView(context: Context) -> UIView {
+		print("HLSPlayerView: Creating UIView")
 		let view = UIView(frame: .zero)
 		let playerLayer = player.getPlayerLayer()
 		playerLayer.frame = view.bounds
 		view.layer.addSublayer(playerLayer)
-		
-		// Set up constraints to keep the playerLayer sized to its superview
-		playerLayer.anchorPoint = .zero
-		playerLayer.position = .zero
-		
 		return view
 	}
 	
 	func updateUIView(_ uiView: UIView, context: Context) {
-		// Ensure the player layer is always the size of the view
-		if let playerLayer = uiView.layer.sublayers?.first {
-			playerLayer.frame = uiView.bounds
+		DispatchQueue.main.async {
+			print("HLSPlayerView: Updating UIView")
+			if let playerLayer = uiView.layer.sublayers?.first as? CAMetalLayer {
+				CATransaction.begin()
+				CATransaction.setDisableActions(true)
+				playerLayer.frame = uiView.bounds
+				CATransaction.commit()
+				print("HLSPlayerView: Updated player layer frame to \(uiView.bounds)")
+			} else {
+				print("HLSPlayerView: Player layer not found or not a CAMetalLayer")
+			}
 		}
 	}
 	
 	static func dismantleUIView(_ uiView: UIView, coordinator: ()) {
+		print("HLSPlayerView: Dismantling UIView")
 		// Clean up any resources if needed
+		if let playerLayer = uiView.layer.sublayers?.first as? CAMetalLayer {
+			playerLayer.removeFromSuperlayer()
+		}
 	}
 }
 
+import SwiftUI
+
 struct HLSPlayer_ContentView: View {
-	var player = HLS_Player_ver_2_Impl()
+	@StateObject private var player = HLS_Player_ver_2_Impl()
 	
 	var body: some View {
 		VStack {
 			HLSPlayerView(player: player)
 				.aspectRatio(16/9, contentMode: .fit)
-				.border(Color.black, width: 5)
+				.background(Color.yellow)
+//				.onAppear {
+//					print("ContentView: HLSPlayerView appeared")
+//					player.play()
+//				}
+//				.onDisappear {
+//					print("HLSPlayer_ContentView: HLSPlayerView disappeared")
+//					player.stop()
+//				}
 			
 			HStack {
-				Button("Play") {
-					player.play()
-				}
-				Button("Pause") {
-					player.pause()
+				Button(player.isPlaying ? "Pause" : "Play") {
+					if player.isPlaying {
+						player.pause()
+					} else {
+						player.play()
+					}
 				}
 				Button("Stop") {
 					player.stop()
 				}
 			}
+			.padding()
+			
+			Text("Playback Time: \(formatTime(player.currentPlaybackTime))")
+			Text("Player State: \(player.playerState)")
 		}
-		.task {
+		.onAppear {
+			print("HLSPlayer_ContentView: View appeared")
 			// Load and prepare your HLS stream
-			player.load_new_movie("http://content.jwplatform.com/manifests/vM7nH0Kl.m3u8")
+			player.load_new_movie("http://qthttp.apple.com.edgesuite.net/1010qwoeiuryfg/0440_vod.m3u8")
 		}
+	}
+	
+	private func formatTime(_ time: TimeInterval) -> String {
+		let minutes = Int(time) / 60
+		let seconds = Int(time) % 60
+		return String(format: "%02d:%02d", minutes, seconds)
 	}
 }

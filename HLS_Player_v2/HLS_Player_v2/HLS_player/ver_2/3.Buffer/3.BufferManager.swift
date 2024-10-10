@@ -7,7 +7,16 @@
 
 import Foundation
 
+
+enum BufferError: Error {
+	case managerDeallocated
+	case noSegmentsAvailable
+}
+
+
 class BufferManager {
+	private let lock = NSLock()
+
 	private var buffer: [BufferedSegment] = []
 	private(set) var maxBufferDuration: TimeInterval
 	private(set) var minBufferDuration: TimeInterval
@@ -32,22 +41,47 @@ class BufferManager {
 	}
 	
 	func addSegment(_ segment: BufferedSegment) {
+		lock.lock()
+		defer { lock.unlock() }
+		
 		print("BufferManager: Adding segment - index: \(segment.index), duration: \(segment.duration), size: \(segment.data.count) bytes")
 		buffer.append(segment)
 		print("BufferManager: Buffer size after adding: \(buffer.count) segments")
 		trimBuffer()
 	}
 	
-	func getNextSegment() -> BufferedSegment? {
-		guard !buffer.isEmpty else {
-			print("BufferManager: Attempted to get next segment, but buffer is empty")
-			return nil
+//	func getNextSegment() -> BufferedSegment? {
+//		lock.lock()
+//		defer { lock.unlock() }
+//		
+//		guard !buffer.isEmpty else {
+//			print("BufferManager: Attempted to get next segment, but buffer is empty")
+//			return nil
+//		}
+//		let segment = buffer.removeFirst()
+//		print("BufferManager: Removed segment from buffer - index: \(segment.index), duration: \(segment.duration)")
+//		print("BufferManager: Buffer size after removal: \(buffer.count) segments")
+//		return segment
+//	}
+	
+	func getNextSegment(completion: @escaping (Result<BufferedSegment, Error>) -> Void) {
+			DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+				guard let self = self else {
+					completion(.failure(BufferError.managerDeallocated))
+					return
+				}
+				
+				self.lock.lock()
+				defer { self.lock.unlock() }
+				
+				if let segment = self.buffer.first {
+					self.buffer.removeFirst()
+					completion(.success(segment))
+				} else {
+					completion(.failure(BufferError.noSegmentsAvailable))
+				}
+			}
 		}
-		let segment = buffer.removeFirst()
-		print("BufferManager: Removed segment from buffer - index: \(segment.index), duration: \(segment.duration)")
-		print("BufferManager: Buffer size after removal: \(buffer.count) segments")
-		return segment
-	}
 	
 	func peekNextSegment() -> BufferedSegment? {
 		guard let segment = buffer.first else {
@@ -72,6 +106,9 @@ class BufferManager {
 	}
 	
 	func isBufferHealthy() -> Bool {
+		lock.lock()
+		defer { lock.unlock() }
+		
 		let healthy = bufferDuration() >= minBufferDuration
 		print("BufferManager: Buffer health check - Is healthy: \(healthy)")
 		return healthy
@@ -81,7 +118,7 @@ class BufferManager {
 		print("BufferManager: Trimming buffer")
 		var trimmedCount = 0
 		while bufferDuration() > maxBufferDuration, buffer.count > 1 {
-			_ = buffer.removeLast()
+			_ = buffer.removeFirst()
 			trimmedCount += 1
 		}
 		print("BufferManager: Trimmed \(trimmedCount) segments from buffer")
