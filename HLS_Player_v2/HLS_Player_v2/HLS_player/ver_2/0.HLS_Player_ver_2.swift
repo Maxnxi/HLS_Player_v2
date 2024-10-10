@@ -48,6 +48,7 @@ enum HLS_Player_state {
 }
 
 import Foundation
+import QuartzCore
 
 final class HLS_Player_ver_2_Impl {
 	private var playerState: HLS_Player_state = .inited
@@ -84,52 +85,84 @@ final class HLS_Player_ver_2_Impl {
 	private var metalVideoView: MetalVideoView?
 	
 	init() {
+		print("HLS_Player_ver_2_Impl: Initializing")
 		self.contentLoadingService = ContentLoadingService()
 		self.bufferManager = BufferManager(maxBufferDuration: vodBufferMax, minBufferDuration: vodBufferMin)
 		self.ffmpegDecoder = FFmpegDecoder()
+		
+		// Set up bandwidth measurement callback
+		self.contentLoadingService.setBandwidthMeasurementCallback { [weak self] bandwidthKbps in
+			self?.handleBandwidthMeasurement(bandwidthKbps)
+		}
+		
+		print("HLS_Player_ver_2_Impl: Initialization complete")
 	}
 	
 	func load_new_movie(_ urlString: String) {
+		print("HLS_Player_ver_2_Impl: Loading new movie from URL: \(urlString)")
 		playerState = .newMovieLoading
 		contentLoadingService.loadPlaylist(from: urlString) { [weak self] result in
 			guard let self = self else { return }
 			switch result {
 			case .success(let playlist):
+				print("HLS_Player_ver_2_Impl: Successfully loaded playlist")
 				if playlist.type == .master {
+					print("HLS_Player_ver_2_Impl: Master playlist detected")
 					self.masterPlaylist = playlist
 					self.update_player_state(.m3u8PlaylistLoaded)
-					self.selectBestVariant()
+					// Note: selectBestVariant is now called in handleBandwidthMeasurement
 				} else {
+					print("HLS_Player_ver_2_Impl: Media playlist detected")
 					self.currentMediaPlaylist = playlist
 					self.update_player_state(.m3u8PlaylistLoaded)
 					self.startPlayback()
 				}
 			case .failure(let error):
-				print("Error: \(error)")
+				print("HLS_Player_ver_2_Impl: Error loading playlist: \(error)")
 				self.update_player_state(.errorDownloadM3u8)
 			}
 		}
 	}
 	
-	private func selectBestVariant() {
-		guard let masterPlaylist = masterPlaylist else { return }
-		if let bestVariant = contentLoadingService.getBestVariant(for: masterPlaylist) {
+	private func handleBandwidthMeasurement(_ bandwidthKbps: Int) {
+		print("HLS_Player_ver_2_Impl: Received bandwidth measurement: \(bandwidthKbps) Kbps")
+		// You might want to implement some logic here to smooth out bandwidth measurements
+		// For now, we'll just use the measurement directly
+		if let masterPlaylist = masterPlaylist {
+			selectBestVariant(for: masterPlaylist, withBandwidth: bandwidthKbps)
+		}
+	}
+	
+	private func checkForQualitySwitch() {
+		print("HLS_Player_ver_2_Impl: Checking for quality switch")
+		guard let masterPlaylist = masterPlaylist else {
+			print("HLS_Player_ver_2_Impl: No master playlist available for quality switch")
+			return
+		}
+		
+		// Use the most recent bandwidth measurement
+		let currentBandwidth = contentLoadingService.getCurrentBandwidth()
+		print("HLS_Player_ver_2_Impl: Current bandwidth for quality switch: \(currentBandwidth) Kbps")
+		
+		selectBestVariant(for: masterPlaylist, withBandwidth: currentBandwidth)
+	}
+	
+	private func selectBestVariant(for masterPlaylist: M3U8Playlist, withBandwidth bandwidth: Int) {
+		print("HLS_Player_ver_2_Impl: Selecting best variant for bandwidth: \(bandwidth) Kbps")
+		if let bestVariant = contentLoadingService.getBestVariant(for: masterPlaylist, withBandwidth: bandwidth) {
 			let isNewVariant = currentVariant?.url != bestVariant.url
-			currentVariant = bestVariant
-			
-			loadMediaPlaylist(for: bestVariant) { [weak self] in
-				guard let self = self else { return }
-				if isNewVariant {
-					self.update_player_state(.need_to_change_movie_quality)
-					self.adjustPlaybackForNewVariant()
-				} else {
-					self.update_player_state(.start_loading_movie)
-					self.ensureBufferIsFull()
+			if isNewVariant {
+				print("HLS_Player_ver_2_Impl: New variant selected. Current: \(currentVariant?.bandwidth ?? 0) Kbps, New: \(bestVariant.bandwidth) Kbps")
+				currentVariant = bestVariant
+				update_player_state(.need_to_change_movie_quality)
+				loadMediaPlaylist(for: bestVariant) { [weak self] in
+					self?.adjustPlaybackForNewVariant()
 				}
+			} else {
+				print("HLS_Player_ver_2_Impl: Keeping current variant: \(bestVariant.bandwidth) Kbps")
 			}
 		} else {
-			print("No suitable variant found")
-			update_player_state(.errorDownloadM3u8)
+			print("HLS_Player_ver_2_Impl: No suitable variant found for bandwidth: \(bandwidth) Kbps")
 		}
 	}
 	
@@ -152,6 +185,7 @@ final class HLS_Player_ver_2_Impl {
 	}
 	
 	private func startPlayback() {
+		print("HLS_Player_ver_2_Impl: Starting playback")
 		contentLoadingService.setPreloadSettings(isAvailable: is_preload_available, minimumDuration: minimum_preload_duration)
 		currentSegmentIndex = 0
 		loadNextSegments()
@@ -166,10 +200,12 @@ final class HLS_Player_ver_2_Impl {
 	private func loadNextSegments() {
 		guard let playlist = currentMediaPlaylist,
 			  currentSegmentIndex < playlist.segments.count else {
+			print("HLS_Player_ver_2_Impl: No more segments to load")
 			update_player_state(.movie_is_playing_preload_not_available)
 			return
 		}
 		
+		print("HLS_Player_ver_2_Impl: Loading next segments. Current index: \(currentSegmentIndex)")
 		while bufferManager.bufferDuration() < bufferManager.maxBufferDuration &&
 				currentSegmentIndex < playlist.segments.count {
 			let segment = playlist.segments[currentSegmentIndex]
@@ -178,10 +214,12 @@ final class HLS_Player_ver_2_Impl {
 	}
 	
 	private func loadSegment(_ segment: M3U8Segment) {
+		print("HLS_Player_ver_2_Impl: Loading segment at index \(currentSegmentIndex)")
 		contentLoadingService.loadSegment(segment) { [weak self] result in
 			guard let self = self else { return }
 			switch result {
 			case .success(let data):
+				print("HLS_Player_ver_2_Impl: Successfully loaded segment. Size: \(data.count) bytes")
 				let bufferedSegment = BufferManager.BufferedSegment(
 					index: self.currentSegmentIndex,
 					data: data,
@@ -192,27 +230,33 @@ final class HLS_Player_ver_2_Impl {
 				self.checkForQualitySwitch()
 				self.updatePlayerState()
 				if self.isPlaying && self.bufferManager.segmentCount() == 1 {
+					print("HLS_Player_ver_2_Impl: First segment loaded, starting playback")
 					self.playNextSegment()
 				}
 				self.loadNextSegments()
 			case .failure(let error):
-				print("Error loading segment: \(error)")
+				print("HLS_Player_ver_2_Impl: Error loading segment: \(error)")
 				self.update_player_state(.errorDownloadSegments)
 			}
 		}
 	}
 	
 	private func playNextSegment() {
-		guard isPlaying, let segment = bufferManager.getNextSegment() else { return }
+		guard isPlaying, let segment = bufferManager.getNextSegment() else {
+			print("HLS_Player_ver_2_Impl: No next segment to play or playback is paused")
+			return
+		}
 		
-		print("Playing segment: \(segment.index), duration: \(segment.duration)")
+		print("HLS_Player_ver_2_Impl: Playing segment: \(segment.index), duration: \(segment.duration)")
 		
 		ffmpegDecoder?.decodeSegment(data: segment.data) { [weak self] decodedFrame in
 			guard let self = self else { return }
+			print("HLS_Player_ver_2_Impl: Decoded frame: \(decodedFrame.description)")
 			self.renderFrame(decodedFrame)
 			
 			// Update playback time
 			self.currentPlaybackTime += segment.duration / self.currentPlaybackRate
+			print("HLS_Player_ver_2_Impl: Updated playback time: \(self.currentPlaybackTime)")
 			
 			// Schedule next segment playback
 			DispatchQueue.main.asyncAfter(deadline: .now() + segment.duration / self.currentPlaybackRate) {
@@ -222,10 +266,7 @@ final class HLS_Player_ver_2_Impl {
 	}
 	
 	private func renderFrame(_ frame: DecodedFrame) {
-		// Here you would implement the logic to display the frame
-		// This could involve passing the frame data to a video renderer
-		// For now, we'll just print some information about the frame
-		print("Rendered frame: Width: \(frame.width), Height: \(frame.height), PTS: \(frame.pts)")
+		print("HLS_Player_ver_2_Impl: Rendering frame: Width: \(frame.width), Height: \(frame.height), PTS: \(frame.pts)")
 		
 		DispatchQueue.main.async {
 			self.metalVideoView?.updateWithFrame(frame)
@@ -244,9 +285,6 @@ final class HLS_Player_ver_2_Impl {
 		}
 	}
 	
-	private func checkForQualitySwitch() {
-		selectBestVariant()
-	}
 	
 	func update_player_state(_ state: HLS_Player_state) {
 		playerState = state
@@ -254,12 +292,15 @@ final class HLS_Player_ver_2_Impl {
 	}
 	
 	func play() {
+		print("HLS_Player_ver_2_Impl: Play requested")
 		checkAndReloadPlaylistIfNeeded { [weak self] in
 			guard let self = self else { return }
 			self.isPlaying = true
 			if self.bufferManager.segmentCount() > 0 {
+				print("HLS_Player_ver_2_Impl: Buffer has segments, starting playback")
 				self.playNextSegment()
 			} else {
+				print("HLS_Player_ver_2_Impl: Buffer empty, loading segments")
 				self.loadNextSegments()
 			}
 			self.startPeriodicPlaylistRefresh()
@@ -324,11 +365,13 @@ final class HLS_Player_ver_2_Impl {
 	}
 	
 	func pause() {
+		print("HLS_Player_ver_2_Impl: Pause requested")
 		isPlaying = false
 		playbackTimer?.invalidate()
 	}
 	
 	func stop() {
+		print("HLS_Player_ver_2_Impl: Stop requested")
 		isPlaying = false
 		playbackTimer?.invalidate()
 		currentPlaybackTime = 0
@@ -359,5 +402,26 @@ final class HLS_Player_ver_2_Impl {
 		is_preload_available = available
 		minimum_preload_duration = minimum_duration
 		contentLoadingService.setPreloadSettings(isAvailable: available, minimumDuration: minimum_duration)
+	}
+}
+
+extension HLS_Player_ver_2_Impl {
+	func getPlayerLayer() -> CALayer {
+		print("HLS_Player_ver_2_Impl: Getting player layer")
+		if let existingLayer = metalVideoView?.layer.sublayers?.first as? HLSPlayerLayer {
+			print("HLS_Player_ver_2_Impl: Returning existing player layer")
+			return existingLayer
+		}
+		
+		print("HLS_Player_ver_2_Impl: Creating new MetalVideoView")
+		let metal_view = MetalVideoView(frame: .zero, device: MTLCreateSystemDefaultDevice())
+		self.metalVideoView = metal_view
+		
+		guard let playerLayer = metal_view.layer.sublayers?.first as? HLSPlayerLayer else {
+			fatalError("Failed to create HLSPlayerLayer")
+		}
+		
+		print("HLS_Player_ver_2_Impl: Returning new player layer")
+		return playerLayer
 	}
 }

@@ -37,6 +37,19 @@ struct ContentView: View {
         } detail: {
             Text("Select an item")
         }
+		.task {
+			/*
+			 let hlsPlayer = HLS_Player_ver_2_Impl()
+			 // ... configure the player
+
+			 // When you're ready to display the video:
+			 let playerLayer = hlsPlayer.getPlayerLayer()
+			 someContainerView.layer.addSublayer(playerLayer)
+			 playerLayer.frame = someContainerView.bounds
+			 */
+			
+			
+		}
     }
 
     private func addItem() {

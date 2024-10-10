@@ -25,7 +25,7 @@ struct HLS_Player_v2App: App {
 
     var body: some Scene {
         WindowGroup {
-            ContentView()
+			HLSPlayer_ContentView()
         }
         .modelContainer(sharedModelContainer)
     }

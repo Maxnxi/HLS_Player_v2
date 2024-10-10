@@ -9,6 +9,7 @@ import MetalKit
 import CoreVideo
 import simd
 
+
 class MetalVideoView: MTKView {
 	private var commandQueue: MTLCommandQueue?
 	private var pipelineState: MTLRenderPipelineState?
@@ -16,6 +17,7 @@ class MetalVideoView: MTKView {
 	private var cbcrTexture: MTLTexture?
 	private var vertices: MTLBuffer?
 	private var textureCoordinates: MTLBuffer?
+	private var playerLayer: HLSPlayerLayer?
 	
 	private let textureCache: CVMetalTextureCache
 	
@@ -36,6 +38,7 @@ class MetalVideoView: MTKView {
 	]
 	
 	override init(frame frameRect: CGRect, device: MTLDevice?) {
+		print("MetalVideoView: Initializing")
 		var textureCache: CVMetalTextureCache?
 		guard let device = device else {
 			fatalError("Metal device not created")
@@ -52,6 +55,8 @@ class MetalVideoView: MTKView {
 		self.backgroundColor = .black
 		self.framebufferOnly = false
 		self.setupMetal()
+		self.setupPlayerLayer()
+		print("MetalVideoView: Initialization complete")
 	}
 	
 	required init(coder: NSCoder) {
@@ -59,6 +64,7 @@ class MetalVideoView: MTKView {
 	}
 	
 	private func setupMetal() {
+		print("MetalVideoView: Setting up Metal")
 		guard let device = self.device else { return }
 		
 		commandQueue = device.makeCommandQueue()
@@ -79,6 +85,7 @@ class MetalVideoView: MTKView {
 		
 		do {
 			pipelineState = try device.makeRenderPipelineState(descriptor: pipelineDescriptor)
+			print("MetalVideoView: Render pipeline state created successfully")
 		} catch {
 			fatalError("Failed to create pipeline state: \(error)")
 		}
@@ -90,11 +97,34 @@ class MetalVideoView: MTKView {
 		textureCoordinates = device.makeBuffer(bytes: quadTextureCoordinates,
 											   length: quadTextureCoordinates.count * MemoryLayout<SIMD2<Float>>.stride,
 											   options: [])
+		print("MetalVideoView: Vertex and texture coordinate buffers created")
+	}
+	
+	private func setupPlayerLayer() {
+		print("MetalVideoView: Setting up player layer")
+		playerLayer = HLSPlayerLayer()
+		playerLayer?.metalVideoView = self
+		playerLayer?.device = device
+		playerLayer?.pixelFormat = .bgra8Unorm
+		playerLayer?.framebufferOnly = false
+		layer.addSublayer(playerLayer!)
+		print("MetalVideoView: Player layer setup complete")
+	}
+	
+	override func layoutSubviews() {
+		super.layoutSubviews()
+		print("MetalVideoView: Laying out subviews")
+		CATransaction.begin()
+		CATransaction.setDisableActions(true)
+		playerLayer?.frame = bounds
+		CATransaction.commit()
+		print("MetalVideoView: Player layer frame updated to \(bounds)")
 	}
 	
 	func updateWithFrame(_ frame: DecodedFrame) {
-		guard frame.data.count >= 3 else {
-			print("Invalid frame data. Expected at least 3 planes for YUV420P.")
+		print("MetalVideoView: Updating with new frame - Size: \(frame.width)x\(frame.height), Format: \(frame.format)")
+		guard frame.data.count >= 2 else {
+			print("MetalVideoView: Invalid frame data. Expected at least 2 planes for YUV420P.")
 			return
 		}
 		
@@ -107,11 +137,19 @@ class MetalVideoView: MTKView {
 		// Create CbCr texture
 		cbcrTexture = createTexture(from: frame.data[1], width: width / 2, height: height / 2, format: .rg8Unorm)
 		
+		if yTexture != nil && cbcrTexture != nil {
+			print("MetalVideoView: Y and CbCr textures created successfully")
+		} else {
+			print("MetalVideoView: Failed to create Y and/or CbCr textures")
+		}
+		
 		// Trigger a redraw
-		self.setNeedsDisplay()
+		playerLayer?.setNeedsDisplay()
+		print("MetalVideoView: Requested redraw")
 	}
 	
 	private func createTexture(from data: Data, width: Int, height: Int, format: MTLPixelFormat) -> MTLTexture? {
+		print("MetalVideoView: Creating texture - Size: \(width)x\(height), Format: \(format)")
 		guard let device = self.device else { return nil }
 		
 		let textureDescriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: format,
@@ -121,7 +159,7 @@ class MetalVideoView: MTKView {
 		textureDescriptor.usage = [.shaderRead]
 		
 		guard let texture = device.makeTexture(descriptor: textureDescriptor) else {
-			print("Failed to create texture")
+			print("MetalVideoView: Failed to create texture")
 			return nil
 		}
 		
@@ -133,17 +171,20 @@ class MetalVideoView: MTKView {
 							bytesPerRow: width * format.bytesPerPixel)
 		}
 		
+		print("MetalVideoView: Texture created successfully")
 		return texture
 	}
 	
-	override func draw(_ rect: CGRect) {
-		guard let drawable = self.currentDrawable,
+	func drawVideo() {
+		print("MetalVideoView: Drawing video frame")
+		guard let drawable = playerLayer?.nextDrawable(),
 			  let pipelineState = pipelineState,
 			  let commandBuffer = commandQueue?.makeCommandBuffer(),
-			  let renderPassDescriptor = self.currentRenderPassDescriptor,
+			  let renderPassDescriptor = currentRenderPassDescriptor,
 			  let renderEncoder = commandBuffer.makeRenderCommandEncoder(descriptor: renderPassDescriptor),
 			  let yTexture = yTexture,
 			  let cbcrTexture = cbcrTexture else {
+			print("MetalVideoView: Failed to get required objects for drawing")
 			return
 		}
 		
@@ -157,6 +198,8 @@ class MetalVideoView: MTKView {
 		
 		commandBuffer.present(drawable)
 		commandBuffer.commit()
+		
+		print("MetalVideoView: Video frame drawn and presented")
 	}
 }
 
