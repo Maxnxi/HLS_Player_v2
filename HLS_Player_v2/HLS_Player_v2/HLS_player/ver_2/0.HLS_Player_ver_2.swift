@@ -102,7 +102,7 @@ final class HLS_Player_ver_2_Impl: ObservableObject {
 	init() {
 		print("HLS_Player_ver_2_Impl: Initializing")
 		self.contentLoadingService = ContentLoadingService()
-		self.bufferManager = BufferManager(maxBufferDuration: vodBufferMax, minBufferDuration: vodBufferMin)
+		self.bufferManager = BufferManager()
 		self.ffmpegDecoder = FFmpegDecoder()
 		
 		self.frameQueue = DispatchQueue(label: "com.hlsplayer.frameQueue")
@@ -119,6 +119,24 @@ final class HLS_Player_ver_2_Impl: ObservableObject {
 		}
 
 		print("HLS_Player_ver_2_Impl: Initialization complete")
+	}
+	
+	private func setupBufferManager(mediaPlaylist: M3U8Playlist) {
+		bufferManager.setupBufferManager(masterPlaylist: masterPlaylist, mediaPlaylist: mediaPlaylist)
+	}
+	
+	private func setupBufferManagerCompletions() {
+		bufferManager.completion_isFinal = {
+			print("bufferManager.completion_isFinal")
+		}
+		
+		bufferManager.completion_needToDownloadMore = { qualityKey in
+			print("bufferManager.completion_needToDownloadMore")
+		}
+		
+		bufferManager.completion_warningCachedTimeLowerMinBufferDuration = { qualityKey in
+			print("bufferManager.completion_warningCachedTimeLowerMinBufferDuration")
+		}
 	}
 	
 	private func updateOnMainThread(_ update: @escaping () -> Void) {
@@ -148,7 +166,10 @@ final class HLS_Player_ver_2_Impl: ObservableObject {
 					print("HLS_Player_ver_2_Impl: Media playlist detected")
 					self.currentMediaPlaylist = playlist
 					self.update_player_state(.m3u8PlaylistLoaded)
-					self.startPlayback()
+//					self.startPlayback()
+					
+					self.setupBufferManager(mediaPlaylist: playlist)
+					
 				}
 			case .failure(let error):
 				print("HLS_Player_ver_2_Impl: Error loading playlist: \(error)")
@@ -242,7 +263,7 @@ final class HLS_Player_ver_2_Impl: ObservableObject {
 	
 	private func adjustPlaybackForNewVariant() {
 		currentSegmentIndex = findSegmentIndex(for: currentPlaybackTime)
-		bufferManager.clearBuffer()
+//		bufferManager.clearBuffer()
 		loadNextSegments()
 	}
 	
@@ -268,9 +289,9 @@ final class HLS_Player_ver_2_Impl: ObservableObject {
 	}
 	
 	private func ensureBufferIsFull() {
-		if bufferManager.bufferDuration() < bufferManager.minBufferDuration {
-			loadNextSegments()
-		}
+//		if bufferManager.bufferDuration() < bufferManager.minBufferDuration {
+//			loadNextSegments()
+//		}
 	}
 	
 	private func loadNextSegments() {
@@ -282,12 +303,12 @@ final class HLS_Player_ver_2_Impl: ObservableObject {
 		}
 		
 		print("HLS_Player_ver_2_Impl: Loading next segments. Current index: \(currentSegmentIndex)")
-		while bufferManager.bufferDuration() < bufferManager.maxBufferDuration &&
-				currentSegmentIndex < playlist.segments.count {
-			let segment = playlist.segments[currentSegmentIndex]
-			loadSegment(segment)
-			currentSegmentIndex += 1
-		}
+//		while bufferManager.bufferDuration() < bufferManager.maxBufferDuration &&
+//				currentSegmentIndex < playlist.segments.count {
+//			let segment = playlist.segments[currentSegmentIndex]
+//			loadSegment(segment)
+//			currentSegmentIndex += 1
+//		}
 	}
 	
 	private func loadSegment(_ segment: M3U8Segment) {
@@ -324,20 +345,22 @@ final class HLS_Player_ver_2_Impl: ObservableObject {
 				return
 			}
 			
-			bufferManager.getNextSegment { [weak self] result in
-				guard let self = self else { return }
-				switch result {
-				case .success(let segment):
-					print("HLS_Player_ver_2_Impl: Decoding segment \(segment.index)")
-					self.decodeAndRenderSegment(segment)
-				case .failure(let error):
-					print("HLS_Player_ver_2_Impl: Failed to get next segment: \(error)")
-					self.stop()
-				}
-			}
+			let nextSegment = bufferManager.getNextSegment
+		
+//		{ [weak self] result in
+//				guard let self = self else { return }
+//				switch result {
+//				case .success(let segment):
+//					print("HLS_Player_ver_2_Impl: Decoding segment \(segment.index)")
+//					self.decodeAndRenderSegment(segment)
+//				case .failure(let error):
+//					print("HLS_Player_ver_2_Impl: Failed to get next segment: \(error)")
+//					self.stop()
+//				}
+//			}
 		}
 	
-	private func decodeAndRenderSegment(_ segment: BufferManager.BufferedSegment) {
+	private func decodeAndRenderSegment(_ segment: BufferedSegment) {
 		guard let ffmpegDecoder else {
 			print("HLS_Player_ver_2_Impl: ffmpegDecoder failed to be initialized")
 			return
@@ -375,15 +398,15 @@ final class HLS_Player_ver_2_Impl: ObservableObject {
 	}
 	
 	private func updatePlayerState() {
-		if bufferManager.isBufferHealthy() {
-			if is_preload_available {
-				update_player_state(.movie_is_playing_preload_available)
-			} else {
-				update_player_state(.movie_is_playing_preload_not_available)
-			}
-		} else {
-			update_player_state(.bandWidthChanged)
-		}
+//		if bufferManager.isBufferHealthy() {
+//			if is_preload_available {
+//				update_player_state(.movie_is_playing_preload_available)
+//			} else {
+//				update_player_state(.movie_is_playing_preload_not_available)
+//			}
+//		} else {
+//			update_player_state(.bandWidthChanged)
+//		}
 	}
 	
 	
@@ -397,14 +420,14 @@ final class HLS_Player_ver_2_Impl: ObservableObject {
 	
 	func play() {
 		   updateOnMainThread {
-			   print("HLS_Player_ver_2_Impl: Play requested")
-			   if self.bufferManager.segmentCount() > 0 {
-				   self.isPlaying = true
-				   self.playNextSegment()
-			   } else {
-				   print("HLS_Player_ver_2_Impl: No segments available, waiting for preload")
-				   self.update_player_state(.start_loading_movie)
-			   }
+//			   print("HLS_Player_ver_2_Impl: Play requested")
+//			   if self.bufferManager.segmentCount() > 0 {
+//				   self.isPlaying = true
+//				   self.playNextSegment()
+//			   } else {
+//				   print("HLS_Player_ver_2_Impl: No segments available, waiting for preload")
+//				   self.update_player_state(.start_loading_movie)
+//			   }
 		   }
 	   
 //		if let currentMediaPlaylist = currentMediaPlaylist {
@@ -460,17 +483,17 @@ final class HLS_Player_ver_2_Impl: ObservableObject {
 	}
 	
 	private func adjustPlaybackStrategyForStreamType() {
-		switch currentStreamType {
-		case .vod:
-			playlistRefreshInterval = .infinity // Don't refresh VOD playlists
-			bufferManager.updateBufferSizes(max: vodBufferMax, min: vodBufferMin)
-		case .live:
-			playlistRefreshInterval = 30 // Refresh live playlists more frequently
-			bufferManager.updateBufferSizes(max: liveBufferMax, min: liveBufferMin)
-		case .event:
-			playlistRefreshInterval = 60 // Refresh event playlists less frequently than live, but still regularly
-			bufferManager.updateBufferSizes(max: eventBufferMax, min: eventBufferMin)
-		}
+//		switch currentStreamType {
+//		case .vod:
+//			playlistRefreshInterval = .infinity // Don't refresh VOD playlists
+//			bufferManager.updateBufferSizes(max: vodBufferMax, min: vodBufferMin)
+//		case .live:
+//			playlistRefreshInterval = 30 // Refresh live playlists more frequently
+//			bufferManager.updateBufferSizes(max: liveBufferMax, min: liveBufferMin)
+//		case .event:
+//			playlistRefreshInterval = 60 // Refresh event playlists less frequently than live, but still regularly
+//			bufferManager.updateBufferSizes(max: eventBufferMax, min: eventBufferMin)
+//		}
 	}
 	
 	private func startPeriodicPlaylistRefresh() {
@@ -563,7 +586,7 @@ extension HLS_Player_ver_2_Impl {
 		stop()
 		ffmpegDecoder = nil
 		metalVideoView = nil
-		bufferManager.clearBuffer()
+//		bufferManager.clearBuffer()
 		contentLoadingService.clearCache()
 	}
 }
@@ -579,12 +602,23 @@ extension HLS_Player_ver_2_Impl {
 				self.updateOnMainThread {
 					switch result {
 					case .success(let data):
-						let bufferedSegment = BufferManager.BufferedSegment(
+						let bufferedSegment = BufferedSegment(
 							index: index,
 							data: data,
 							duration: segment.duration
 						)
-						self.bufferManager.addSegment(bufferedSegment)
+						
+						
+						
+						// MARK: - todo
+						
+						
+						self.bufferManager.addSegment(
+							quality_Key: <#T##Quality_Key#>,
+							segment: bufferedSegment,
+							isLowQuality: <#T##Bool#>
+						)
+						
 						segmentsLoaded += 1
 						if segmentsLoaded == 6 {
 							print("HLS_Player_ver_2_Impl: Preloaded 6 segments, starting playback")
