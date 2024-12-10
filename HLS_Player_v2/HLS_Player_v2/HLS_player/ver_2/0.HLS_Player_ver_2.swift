@@ -61,6 +61,12 @@ final class HLS_Player_ver_2_Impl: ObservableObject {
 	private var masterPlaylist: M3U8Playlist?
 	private var currentMediaPlaylist: M3U8Playlist?
 	private var currentVariant: M3U8Variant?
+	private var bestVariant: M3U8Variant?
+	private var bestVariantCounter: Int = 0
+	
+	var qualityKeys: [Quality_Key] = []
+	var currentQuality: Quality_Key?
+	
 	private var currentSegmentIndex: Int = 0
 	private var isDecodingSegment = false
 	
@@ -130,12 +136,18 @@ final class HLS_Player_ver_2_Impl: ObservableObject {
 			print("bufferManager.completion_isFinal")
 		}
 		
-		bufferManager.completion_needToDownloadMore = { qualityKey in
+		bufferManager.completion_needToDownloadMore = { [weak self] qualityKey in
 			print("bufferManager.completion_needToDownloadMore")
+			self?.loadSegment()
 		}
 		
-		bufferManager.completion_warningCachedTimeLowerMinBufferDuration = { qualityKey in
+		bufferManager.completion_warningCachedTimeLowerMinBufferDuration = { [weak self] qualityKey in
 			print("bufferManager.completion_warningCachedTimeLowerMinBufferDuration")
+			self?.loadSegment()
+		}
+		
+		bufferManager.completion_start_download = { [weak self] segmentsCount in
+			self?.loadSegments(counter: segmentsCount)
 		}
 	}
 	
@@ -149,7 +161,7 @@ final class HLS_Player_ver_2_Impl: ObservableObject {
 			}
 		}
 	
-	func load_new_movie(_ urlString: String) {
+	public func load_new_movie(_ urlString: String) {
 		print("HLS_Player_ver_2_Impl: Loading new movie from URL: \(urlString)")
 		playerState = .newMovieLoading
 		contentLoadingService.loadPlaylist(from: urlString) { [weak self] result in
@@ -162,11 +174,14 @@ final class HLS_Player_ver_2_Impl: ObservableObject {
 					self.masterPlaylist = playlist
 					self.update_player_state(.m3u8PlaylistLoaded)
 					// Note: selectBestVariant is now called in handleBandwidthMeasurement
+					self.setQualityKeys(masterPlaylist: playlist)
 				} else {
 					print("HLS_Player_ver_2_Impl: Media playlist detected")
 					self.currentMediaPlaylist = playlist
 					self.update_player_state(.m3u8PlaylistLoaded)
 //					self.startPlayback()
+					
+					self.currentQuality = Quality_Key(index: 0, quality: 1)
 					
 					self.setupBufferManager(mediaPlaylist: playlist)
 					
@@ -178,6 +193,19 @@ final class HLS_Player_ver_2_Impl: ObservableObject {
 		}
 	}
 	
+	private func setQualityKeys(masterPlaylist: M3U8Playlist) {
+		
+		var qualityKeys: [Quality_Key] = []
+		
+		for (index, variant) in masterPlaylist.variants.enumerated() {
+			let qualityKey: Quality_Key = Quality_Key(index: index, quality: variant.bandwidth)
+		}
+		qualityKeys.sort(by: { $0.quality < $1.quality })
+		
+		self.qualityKeys = qualityKeys
+		
+	}
+	
 	private func handleBandwidthMeasurement(_ bandwidthKbps: Int) {
 		print("HLS_Player_ver_2_Impl: Received bandwidth measurement: \(bandwidthKbps) Kbps")
 		// You might want to implement some logic here to smooth out bandwidth measurements
@@ -187,35 +215,59 @@ final class HLS_Player_ver_2_Impl: ObservableObject {
 		}
 	}
 	
-	private func checkForQualitySwitch() {
-		print("HLS_Player_ver_2_Impl: Checking for quality switch")
-		guard let masterPlaylist = masterPlaylist else {
-			print("HLS_Player_ver_2_Impl: No master playlist available for quality switch")
-			return
-		}
-		
-		// Use the most recent bandwidth measurement
-		let currentBandwidth = contentLoadingService.getCurrentBandwidth()
-		print("HLS_Player_ver_2_Impl: Current bandwidth for quality switch: \(currentBandwidth) Kbps")
-		
-		selectBestVariant(for: masterPlaylist, withBandwidth: currentBandwidth)
-	}
+//	private func checkForQualitySwitch() {
+//		print("HLS_Player_ver_2_Impl: Checking for quality switch")
+//		guard let masterPlaylist = masterPlaylist else {
+//			print("HLS_Player_ver_2_Impl: No master playlist available for quality switch")
+//			return
+//		}
+//		
+//		// Use the most recent bandwidth measurement
+//		let currentBandwidth = contentLoadingService.getCurrentBandwidth()
+//		print("HLS_Player_ver_2_Impl: Current bandwidth for quality switch: \(currentBandwidth) Kbps")
+//		
+//		selectBestVariant(for: masterPlaylist, withBandwidth: currentBandwidth)
+//	}
 	
-	private func handleMasterPlaylist(_ playlist: M3U8Playlist) {
-		print("HLS_Player_ver_2_Impl: Handling master playlist")
-		self.masterPlaylist = playlist
-		self.update_player_state(.m3u8PlaylistLoaded)
-		
-		// Select the best variant based on current bandwidth
-		let currentBandwidth = contentLoadingService.getCurrentBandwidth()
-		selectBestVariant(for: playlist, withBandwidth: currentBandwidth)
-	}
+//	private func handleMasterPlaylist(_ playlist: M3U8Playlist) {
+//		print("HLS_Player_ver_2_Impl: Handling master playlist")
+//		self.masterPlaylist = playlist
+//		self.update_player_state(.m3u8PlaylistLoaded)
+//		
+//		// Select the best variant based on current bandwidth
+//		let currentBandwidth = contentLoadingService.getCurrentBandwidth()
+//		selectBestVariant(for: playlist, withBandwidth: currentBandwidth)
+//	}
 	
 	private func selectBestVariant(for masterPlaylist: M3U8Playlist, withBandwidth bandwidth: Int) {
 		print("HLS_Player_ver_2_Impl: Selecting best variant for bandwidth: \(bandwidth) Kbps")
-		if let bestVariant = contentLoadingService.getBestVariant(for: masterPlaylist, withBandwidth: bandwidth) {
-			currentVariant = bestVariant
-			loadMediaPlaylist(for: bestVariant)
+		if let best_Variant = contentLoadingService.getBestVariant(for: masterPlaylist, withBandwidth: bandwidth) {
+			
+			if let currentVariant {
+				if let bestVariant {
+					guard bestVariant.url == best_Variant.url else {
+						self.bestVariant = best_Variant
+						bestVariantCounter = 5
+						return
+					}
+					if bestVariantCounter == 0 {
+						self.currentVariant = bestVariant
+						self.bestVariant = nil
+						loadMediaPlaylist(for: best_Variant)
+					} else {
+						bestVariantCounter -= 1
+					}
+				} else {
+					self.bestVariant = best_Variant
+					bestVariantCounter = 5
+				}
+				
+			} else {
+				currentVariant = bestVariant
+				loadMediaPlaylist(for: best_Variant)
+			}
+			
+			
 		} else {
 			print("HLS_Player_ver_2_Impl: No suitable variant found for bandwidth: \(bandwidth) Kbps")
 			update_player_state(.errorDownloadM3u8)
@@ -232,9 +284,14 @@ final class HLS_Player_ver_2_Impl: ObservableObject {
 				self.currentStreamType = mediaPlaylist.streamType
 				self.adjustPlaybackStrategyForStreamType()
 				self.update_player_state(.m3u8PlaylistLoaded)
-				if self.playerState == .start_loading_movie {
-					self.startPlayback()
-				}
+//				if self.playerState == .start_loading_movie {
+//					self.startPlayback()
+//				}
+				
+				self.currentQuality = qualityKeys.first(where: { $0.quality == variant.bandwidth })
+				
+				self.setupBufferManager(mediaPlaylist: mediaPlaylist)
+				
 			case .failure(let error):
 				print("HLS_Player_ver_2_Impl: Error loading media playlist: \(error)")
 				self.update_player_state(.errorDownloadM3u8)
@@ -261,11 +318,11 @@ final class HLS_Player_ver_2_Impl: ObservableObject {
 	//		}
 	//	}
 	
-	private func adjustPlaybackForNewVariant() {
-		currentSegmentIndex = findSegmentIndex(for: currentPlaybackTime)
-//		bufferManager.clearBuffer()
-		loadNextSegments()
-	}
+//	private func adjustPlaybackForNewVariant() {
+//		currentSegmentIndex = findSegmentIndex(for: currentPlaybackTime)
+////		bufferManager.clearBuffer()
+//		loadNextSegments()
+//	}
 	
 	private func findSegmentIndex(for time: TimeInterval) -> Int {
 		guard let playlist = currentMediaPlaylist else { return 0 }
@@ -284,7 +341,7 @@ final class HLS_Player_ver_2_Impl: ObservableObject {
 		DispatchQueue.main.async { [weak self] in
 			self?.isPlaying = true
 		}
-		currentSegmentIndex = 0
+//		currentSegmentIndex = 0
 		loadNextSegments()
 	}
 	
@@ -311,27 +368,69 @@ final class HLS_Player_ver_2_Impl: ObservableObject {
 //		}
 	}
 	
-	private func loadSegment(_ segment: M3U8Segment) {
+	private func loadSegments(counter: Int) {
+		
+		guard let currentMediaPlaylist else { return }
+		
+		guard let currentQuality else { return }
+		
+		for index in 0..<counter {
+			let segment = currentMediaPlaylist.segments[index]
+			contentLoadingService.loadSegment(segment) { [weak self] result in
+				guard let self else { return }
+				switch result {
+				case .success(let data):
+					print("HLS_Player_ver_2_Impl: Successfully loaded segment. Size: \(data.count) bytes")
+					let bufferedSegment = BufferedSegment(
+						index: self.currentSegmentIndex,
+						data: data,
+						duration: segment.duration
+					)
+					bufferManager.addSegment(quality_Key: currentQuality, segment: bufferedSegment, isLowQuality: false)
+				case .failure(let error):
+					print("HLS_Player_ver_2_Impl: Error loading segment: \(error)")
+				}
+			}
+		}
+	}
+	
+	private func loadSegment() {
+		
+		guard let loadInfo = bufferManager.whatToLoadNext() else {
+			return
+		}
+		
+		guard let masterPlaylist else {
+			loadSegments(counter: 1)
+			return
+		}
+			//let variant = masterPlaylist.variants.first(where: { $0.bandwidth == loadInfo.0.quality })
+		guard let currentMediaPlaylist else {
+			return
+		}
+		let segment = currentMediaPlaylist.segments[loadInfo.segmentIndex]
+
 		print("HLS_Player_ver_2_Impl: Loading segment at index \(currentSegmentIndex)")
 		contentLoadingService.loadSegment(segment) { [weak self] result in
 			guard let self = self else { return }
 			switch result {
 			case .success(let data):
 				print("HLS_Player_ver_2_Impl: Successfully loaded segment. Size: \(data.count) bytes")
-				let bufferedSegment = BufferManager.BufferedSegment(
+				let bufferedSegment = BufferedSegment(
 					index: self.currentSegmentIndex,
 					data: data,
 					duration: segment.duration
 				)
-				self.bufferManager.addSegment(bufferedSegment)
-				self.currentSegmentIndex += 1
-				self.checkForQualitySwitch()
-				self.updatePlayerState()
-				if self.isPlaying && self.bufferManager.segmentCount() == 1 {
-					print("HLS_Player_ver_2_Impl: First segment loaded, starting playback")
-					self.playNextSegment()
-				}
-				self.loadNextSegments()
+				
+				self.bufferManager.addSegment(quality_Key: loadInfo.0, segment: bufferedSegment, isLowQuality: false)
+//				self.currentSegmentIndex += 1
+//				self.checkForQualitySwitch()
+//				self.updatePlayerState()
+//				if self.isPlaying && self.bufferManager.segmentCount() == 1 {
+//					print("HLS_Player_ver_2_Impl: First segment loaded, starting playback")
+//					self.playNextSegment()
+//				}
+//				self.loadNextSegments()
 			case .failure(let error):
 				print("HLS_Player_ver_2_Impl: Error loading segment: \(error)")
 				self.update_player_state(.errorDownloadSegments)
@@ -419,7 +518,16 @@ final class HLS_Player_ver_2_Impl: ObservableObject {
 	}
 	
 	func play() {
-		   updateOnMainThread {
+		
+		
+		guard let segment = bufferManager.getNextSegment() else {
+			print("no segmetns")
+			return
+		}
+		
+		decodeAndRenderSegment(segment)
+		
+//		   updateOnMainThread {
 //			   print("HLS_Player_ver_2_Impl: Play requested")
 //			   if self.bufferManager.segmentCount() > 0 {
 //				   self.isPlaying = true
@@ -428,7 +536,7 @@ final class HLS_Player_ver_2_Impl: ObservableObject {
 //				   print("HLS_Player_ver_2_Impl: No segments available, waiting for preload")
 //				   self.update_player_state(.start_loading_movie)
 //			   }
-		   }
+//		   }
 	   
 //		if let currentMediaPlaylist = currentMediaPlaylist {
 //			if currentMediaPlaylist.segments.isEmpty {
@@ -525,7 +633,7 @@ final class HLS_Player_ver_2_Impl: ObservableObject {
 			self.isPlaying = false
 			self.playbackTimer?.invalidate()
 			self.currentPlaybackTime = 0
-			self.bufferManager.clearBuffer()
+//			self.bufferManager.clearBuffer()
 			self.contentLoadingService.clearCache()
 		}
 	}
@@ -534,7 +642,7 @@ final class HLS_Player_ver_2_Impl: ObservableObject {
 		updateOnMainThread {
 			self.currentPlaybackTime = time
 			self.currentSegmentIndex = self.findSegmentIndex(for: time)
-			self.bufferManager.clearBuffer()
+//			self.bufferManager.clearBuffer()
 			self.loadNextSegments()
 			if self.isPlaying {
 				self.playNextSegment()
@@ -593,44 +701,44 @@ extension HLS_Player_ver_2_Impl {
 
 
 extension HLS_Player_ver_2_Impl {
-	private func preloadSegments() {
-		guard let playlist = currentMediaPlaylist else { return }
-		var segmentsLoaded = 0
-		for (index, segment) in playlist.segments.prefix(6).enumerated() {
-			contentLoadingService.loadSegment(segment) { [weak self] result in
-				guard let self = self else { return }
-				self.updateOnMainThread {
-					switch result {
-					case .success(let data):
-						let bufferedSegment = BufferedSegment(
-							index: index,
-							data: data,
-							duration: segment.duration
-						)
-						
-						
-						
-						// MARK: - todo
-						
-						
-						self.bufferManager.addSegment(
-							quality_Key: <#T##Quality_Key#>,
-							segment: bufferedSegment,
-							isLowQuality: <#T##Bool#>
-						)
-						
-						segmentsLoaded += 1
-						if segmentsLoaded == 6 {
-							print("HLS_Player_ver_2_Impl: Preloaded 6 segments, starting playback")
-							self.play()
-						}
-					case .failure(let error):
-						print("HLS_Player_ver_2_Impl: Error preloading segment: \(error)")
-					}
-				}
-			}
-		}
-	}
+//	private func preloadSegments() {
+//		guard let playlist = currentMediaPlaylist else { return }
+//		var segmentsLoaded = 0
+//		for (index, segment) in playlist.segments.prefix(6).enumerated() {
+//			contentLoadingService.loadSegment(segment) { [weak self] result in
+//				guard let self = self else { return }
+//				self.updateOnMainThread {
+//					switch result {
+//					case .success(let data):
+//						let bufferedSegment = BufferedSegment(
+//							index: index,
+//							data: data,
+//							duration: segment.duration
+//						)
+//						
+//						
+//						
+//						// MARK: - todo
+//						
+//						
+//						self.bufferManager.addSegment(
+//							quality_Key: <#T##Quality_Key#>,
+//							segment: bufferedSegment,
+//							isLowQuality: <#T##Bool#>
+//						)
+//						
+//						segmentsLoaded += 1
+//						if segmentsLoaded == 6 {
+//							print("HLS_Player_ver_2_Impl: Preloaded 6 segments, starting playback")
+//							self.play()
+//						}
+//					case .failure(let error):
+//						print("HLS_Player_ver_2_Impl: Error preloading segment: \(error)")
+//					}
+//				}
+//			}
+//		}
+//	}
 }
 
 

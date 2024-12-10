@@ -19,6 +19,8 @@ enum Buffer_WarningType {
 	
 	case nextSegmentWasPrepared_successfully(Quality_Key, Int)
 	
+	case needToLoadSegments(Int)
+	
 	case isFinal
 }
 
@@ -70,7 +72,7 @@ class BufferManager {
 	var completion_warningCachedTimeLowerMinBufferDuration: ((Quality_Key) -> ())?
 	var completion_needToDownloadMore: ((Quality_Key) -> ())?
 	var completion_isFinal: (() -> ())?
-	
+	var completion_start_download: ((Int) -> ())?
 	
 	private let addLock = NSLock()
 	
@@ -115,25 +117,104 @@ class BufferManager {
 		print("BufferManager: Initialized")
 	}
 	
+	public func whatToLoadNext() -> (Quality_Key, segmentIndex: Int, isFinal: Bool)? {
+		if switchQualityAfterSegmentsInQueue == nil {
+			guard let media_playlist else { return nil }
+			guard let current_qualityKey else { return nil }
+			
+			var lastIndex = current_timeline_cache.last?.index ?? current_segment_index
+			let isMoreSegments = isMoreSegmentsInPlaylist(from: lastIndex, mediaPlayList: media_playlist)
+			let isFinal: Bool = self.isFinal || isMoreSegments
+			if isMoreSegments {
+				lastIndex += 1
+			}
+			return (current_qualityKey, lastIndex, isFinal)
+		} else {
+			guard let next_media_playlist else { return nil }
+			guard let nextQuality else { return nil }
+			
+			var lastIndex = next_timeline_cache.last?.index ?? current_segment_index
+			let isMoreSegments = isMoreSegmentsInPlaylist(from: lastIndex, mediaPlayList: next_media_playlist)
+			let isFinal: Bool = self.isFinal || isMoreSegments
+			if isMoreSegments {
+				lastIndex += 1
+			}
+			return (nextQuality, lastIndex, isFinal)
+		}
+	}
+	
 	func setupBufferManager(
 		masterPlaylist: M3U8Playlist?,
 		mediaPlaylist: M3U8Playlist,
 		bufferOption: KeepCacheBufferOption = .keepAllSegments
 	) {
-		// clean current_qualityKey - because it is set when new segment is adding
+		if let media_playlist {
+			if let next_media_playlist {
+				
+				current_timeline_cache.append(contentsOf: next_timeline_cache)
+				
+				next_timeline_cache.removeAll()
+				self.next_media_playlist = mediaPlaylist
+				
+			} else {
+				switchQualityAfterSegmentsInQueue = current_timeline_cache.count
+				next_media_playlist = mediaPlaylist
+			}
+			
+		} else {
+			// clean current_qualityKey - because it is set when new segment is adding
+			cleanBuffer()
+			
+			self.master_playlist = masterPlaylist
+			self.media_playlist = mediaPlaylist
+			self.keep_cache_bufferOption = bufferOption
+			
+			set_recommended_settings(streamType: masterPlaylist?.streamType)
+			
+			set_current_timeline(segments: mediaPlaylist.segments)
+		}
+		
+		var segmentsCount = 0
+		var bufferDuration: TimeInterval = maxBufferDuration
+		
+		switch keep_cache_bufferOption {
+		case .keepAllSegments:
+			segmentsCount = mediaPlaylist.segments.count
+			
+		case .keepSegmentsWithinTimeInterval:
+			while bufferDuration > 0 {
+				for segment in mediaPlaylist.segments {
+					segmentsCount += 1
+					bufferDuration -= segment.duration
+				}
+			}
+		}
+		
+		warnPlayer(typeOfWarning: .needToLoadSegments(segmentsCount))
+	}
+	
+	
+	
+	
+	private func cleanBuffer() {
+		current_segment_index = 0
+		
+		switchQualityAfterSegmentsInQueue = nil
+		nextQuality = nil
+		next_media_playlist = nil
+		
 		current_qualityKey = nil
 		isFinal = false
 		
-		self.master_playlist = masterPlaylist
-		self.media_playlist = mediaPlaylist
-		self.keep_cache_bufferOption = bufferOption
+		current_timeline_cache = []
+		next_timeline_cache = []
+		past_timeline_cache = []
 		
-		set_recommended_settings(streamType: masterPlaylist?.streamType)
-		
-		set_current_timeline(segments: mediaPlaylist.segments)
-		
-		
+		dictionary_downloaded_segments.removeAll()
+		dictionary_Info_about_downloaded_segments.removeAll()
 	}
+	
+	
 	
 	private func set_current_timeline(segments: [M3U8Segment]) {
 		current_timeline = segments.map { $0.duration }
@@ -407,6 +488,10 @@ class BufferManager {
 			
 		case .nextSegmentWasPrepared_successfully(let qualityKey, let segmentIndex):
 			print("nextSegmentWasPrepared_successfully \(qualityKey) \(segmentIndex)")
+			
+		case .needToLoadSegments(let segmentsCount):
+			print("needToLoadSegments \(segmentsCount)")
+			completion_start_download?(segmentsCount)
 			
 		}
 	}
